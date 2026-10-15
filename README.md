@@ -136,6 +136,8 @@ and real document access. That's the whole reason this is built the way it is.
 
 ## Docs
 
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — why it's an Editor add-on, why the merge
+  stops at five minutes, and which platform limits shaped the design
 - [`docs/DEPLOY.md`](docs/DEPLOY.md) — getting it into the Marketplace
 - [`docs/SHARING.md`](docs/SHARING.md) — sharing without going through review
 - [`docs/CLOUD-PROJECT.md`](docs/CLOUD-PROJECT.md) — the Cloud project move, and why it decides
