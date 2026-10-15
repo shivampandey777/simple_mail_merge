@@ -1,0 +1,9 @@
+{
+  "scriptId": "PASTE_YOUR_OWN_SCRIPT_ID_HERE",
+  "rootDir": "src",
+  "scriptExtensions": [".js", ".gs"],
+  "htmlExtensions": [".html"],
+  "jsonExtensions": [".json"],
+  "filePushOrder": [],
+  "skipSubdirectories": false
+}

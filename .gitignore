@@ -1,0 +1,16 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Built by `npm run build` in ui/ and pushed by clasp. Generated, not source.
+src/Dialog.html
+
+# Ties the repo to one person's Apps Script project. See .clasp.json.example.
+.clasp.json
+
+# macOS
+.DS_Store
+
+# Local scratch that isn't part of the project
+old/
+card-addon-unused/
