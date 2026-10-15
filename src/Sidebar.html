@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; padding: 12px; color: #202124; }
+    label { display: block; margin-top: 10px; font-weight: bold; }
+    input, select { width: 100%; box-sizing: border-box; padding: 6px; margin-top: 4px; }
+    button { margin-top: 10px; padding: 8px 12px; border: 0; border-radius: 4px; cursor: pointer; width: 100%; }
+    .primary { background: #1a73e8; color: #fff; }
+    .secondary { background: #e8eaed; }
+    button:disabled { opacity: .5; cursor: default; }
+    #msg { margin-top: 12px; padding: 8px; border-radius: 4px; display: none; white-space: pre-wrap; }
+    .ok { background: #e6f4ea; } .err { background: #fce8e6; }
+    .hint { color: #5f6368; font-size: 12px; margin-top: 4px; }
+    code { background: #f1f3f4; padding: 1px 4px; border-radius: 3px; }
+    h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #5f6368; }
+    #preview { display: none; margin-top: 12px; border: 1px solid #dadce0; border-radius: 6px; padding: 10px; }
+    #preview.fresh { border-color: #1a73e8; }
+    .subj { font-weight: bold; margin-bottom: 6px; }
+    pre { background: #f8f9fa; border: 1px solid #eceff1; border-radius: 4px; padding: 8px;
+          white-space: pre-wrap; word-wrap: break-word; font-family: inherit; margin: 0; max-height: 160px; overflow: auto; }
+    .list { max-height: 120px; overflow: auto; border: 1px solid #eceff1; border-radius: 4px;
+            padding: 6px; background: #f8f9fa; font-size: 12px; }
+    .warn { color: #b06000; }
+    .confirm { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-weight: bold; }
+    .confirm input { width: auto; margin-top: 2px; }
+    #overlay { display: none; position: fixed; inset: 0; background: rgba(255,255,255,.85); z-index: 10;
+               flex-direction: column; align-items: center; justify-content: center; }
+    .spinner { width: 42px; height: 42px; border: 5px solid #e8eaed; border-top-color: #1a73e8;
+               border-radius: 50%; animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #ovText { margin-top: 14px; font-weight: bold; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="msg"></div>
+  <div id="info" class="hint">Loading…</div>
+  <div id="stats" style="margin-top:6px;font-weight:bold"></div>
+
+  <h3>Template</h3>
+  <label>Gmail draft</label>
+  <select id="draft"></select>
+  <div class="hint">Use placeholders like <code>{{Name}}</code>. Columns: <span id="cols"></span></div>
+
+  <h3>From</h3>
+  <label>Sender name</label><input id="fromName" placeholder="Optional">
+  <label>Send as (alias)</label><select id="alias"><option value="">Default</option></select>
+  <label>Reply-to</label><input id="replyTo" placeholder="Optional">
+  <label>CC</label><input id="cc" placeholder="a@x.com, b@x.com">
+  <label>BCC</label><input id="bcc" placeholder="Optional">
+  <label>Delay between emails (sec, 0–10)</label><input id="delaySec" type="number" min="0" max="10" value="0">
+
+  <button class="primary" id="reviewBtn" onclick="review()">Review recipients &amp; content</button>
+  <button class="secondary" id="testBtn" onclick="act('test')">Send test to myself</button>
+
+  <div id="preview">
+    <div id="pvSummary" class="hint"></div>
+    <h3>First email — exactly as it will read</h3>
+    <div id="pvSample"></div>
+    <h3>Recipients (<span id="pvCount"></span>)</h3>
+    <div id="pvTo" class="list"></div>
+    <div id="pvInvalid"></div>
+    <label class="confirm">
+      <input type="checkbox" id="confirmBox" onchange="onConfirm()">
+      <span>I have checked the content above and the recipients who will receive it.</span>
+    </label>
+    <button class="primary" id="sendBtn" disabled onclick="act('send')">Send</button>
+    <div class="hint">Nothing is sent until you tick the box and press Send.</div>
+  </div>
+
+  <h3>Schedule</h3>
+  <input id="when" type="datetime-local">
+  <button class="secondary" id="schedBtn" onclick="act('schedule')">Schedule send</button>
+
+  <h3>Tools</h3>
+  <button class="secondary" onclick="act('cancel')">Cancel scheduled send</button>
+  <button class="secondary" onclick="act('check')">Check replies &amp; bounces</button>
+
+  <div id="overlay"><div class="spinner"></div><div id="ovText">Working…</div></div>
+
+<script>
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function show(text, ok) {
+    const m = document.getElementById('msg');
+    m.textContent = text; m.className = ok ? 'ok' : 'err'; m.style.display = 'block';
+    if (!ok) m.scrollIntoView();   // never hide a failure below the fold again
+  }
+  function hide(id) { document.getElementById(id).style.display = 'none'; }
+  function reveal(id) { document.getElementById(id).style.display = 'block'; }
+
+  let poll = null;
+  function busy(b, text) {
+    document.querySelectorAll('button').forEach(x => x.disabled = b);
+    document.getElementById('overlay').style.display = b ? 'flex' : 'none';
+    document.getElementById('ovText').textContent = text || 'Working…';
+    clearInterval(poll);
+    if (b) {
+      // google.script.run allows 10 concurrent calls, so this polling runs
+      // alongside the send that is still in flight.
+      poll = setInterval(() => {
+        google.script.run.withSuccessHandler(p => {
+          if (p) document.getElementById('ovText').textContent = 'Processing ' + p.done + ' of ' + p.total + '…';
+        }).getProgress();
+      }, 2000);
+    }
+  }
+  function val(id) { return document.getElementById(id).value.trim(); }
+
+  /* Any settings change invalidates a preview the user already approved. */
+  function invalidate() {
+    hide('preview');
+    document.getElementById('confirmBox').checked = false;
+    document.getElementById('sendBtn').disabled = true;
+  }
+
+  function load() {
+    google.script.run.withSuccessHandler(d => {
+      document.getElementById('info').textContent =
+        'Sheet: ' + d.sheet + ' | Rows: ' + d.rows + ' | Emails left today: ' + d.quota +
+        (d.scheduledAt ? ' | Scheduled: ' + new Date(d.scheduledAt).toLocaleString() : '');
+      const st = d.stats;
+      document.getElementById('stats').textContent =
+        'Sent: ' + st.sent + ' | Replied: ' + st.replied + ' | Bounced: ' + st.bounced +
+        ' | Invalid: ' + st.invalid + ' | Errors: ' + st.errors;
+      document.getElementById('cols').textContent = d.headers.join(', ');
+
+      const dr = document.getElementById('draft');
+      dr.innerHTML = '';
+      d.drafts.forEach(s => { const o = document.createElement('option'); o.value = o.textContent = s; dr.appendChild(o); });
+
+      const al = document.getElementById('alias');
+      al.innerHTML = '<option value="">Default</option>';
+      d.aliases.forEach(a => { const o = document.createElement('option'); o.value = o.textContent = a; al.appendChild(o); });
+    }).withFailureHandler(e => {
+      document.getElementById('info').textContent = 'Could not load the sheet.';
+      show('Could not read the spreadsheet or Gmail: ' + (e && e.message ? e.message : e), false);
+    }).getSidebarData();
+  }
+
+  function opts() {
+    return { subject: val('draft'), fromName: val('fromName'), alias: val('alias'), replyTo: val('replyTo'),
+             cc: val('cc'), bcc: val('bcc'), delaySec: Number(val('delaySec')) || 0 };
+  }
+
+  /* ---- review: show exactly who gets what, then require a tick ---- */
+
+  function review() {
+    if (!val('draft')) return show('Choose a draft first.', false);
+    hide('msg'); invalidate();
+    busy(true, 'Building preview…');
+    google.script.run
+      .withSuccessHandler(renderPreview)
+      .withFailureHandler(e => { busy(false); show(e.message, false); })
+      .previewMerge(opts());
+  }
+
+  function renderPreview(p) {
+    busy(false);
+
+    const bits = ['<b>' + p.pending + '</b> email(s) will be sent.'];
+    if (p.alreadyDone) bits.push(p.alreadyDone + ' row(s) already have a status and will be skipped.');
+    if (p.unsubscribed) bits.push(p.unsubscribed + ' row(s) skipped as unsubscribed.');
+    if (p.invalidCount) {
+      bits.push('<span class="warn">' + p.invalidCount + ' row(s) have an invalid address and will be marked INVALID EMAIL.</span>');
+    }
+    if (p.attachments.length) bits.push('Attached to every email: ' + esc(p.attachments.join(', ')));
+    if (p.inlineImageCount) bits.push(p.inlineImageCount + ' inline image(s).');
+    bits.push('Gmail sends left today: <b>' + p.quota + '</b>');
+    if (p.pending > p.quota) {
+      bits.push('<span class="warn">That is more than your remaining quota — the rest will be left for tomorrow.</span>');
+    }
+    document.getElementById('pvSummary').innerHTML = bits.map(b => '• ' + b).join('<br>');
+
+    document.getElementById('pvSample').innerHTML = p.sample
+      ? '<div class="subj">' + esc(p.sample.subject) + '</div><pre>' + esc(p.sample.body) + '</pre>'
+      : '<i>No rows are ready to send.</i>';
+
+    document.getElementById('pvCount').textContent = p.pending;
+    document.getElementById('pvTo').innerHTML = p.recipients.length
+      ? p.recipients.map(esc).join('<br>') +
+        (p.moreRecipients ? '<br><i>…and ' + p.moreRecipients + ' more</i>' : '')
+      : '<i>None</i>';
+
+    document.getElementById('pvInvalid').innerHTML = p.invalid.length
+      ? '<h3>Will not be sent</h3><div class="list">' +
+        p.invalid.map(x => 'Row ' + x.row + ': ' + esc(x.to)).join('<br>') + '</div>'
+      : '';
+
+    const sendBtn = document.getElementById('sendBtn');
+    sendBtn.textContent = 'Send ' + p.pending + ' email' + (p.pending === 1 ? '' : 's') + ' now';
+    sendBtn.disabled = true;                       // stays locked until the box is ticked
+    document.getElementById('confirmBox').checked = false;
+    document.getElementById('confirmBox').disabled = p.pending === 0;
+
+    reveal('preview');
+    document.getElementById('preview').className = 'fresh';
+    document.getElementById('preview').scrollIntoView();
+  }
+
+  function onConfirm() {
+    const ticked = document.getElementById('confirmBox').checked;
+    const pending = Number(document.getElementById('pvCount').textContent) || 0;
+    document.getElementById('sendBtn').disabled = !ticked || pending === 0;
+  }
+
+  /* ---- actions ---- */
+
+  function act(kind) {
+    if (kind !== 'cancel' && kind !== 'check' && !val('draft')) return show('Choose a draft first.', false);
+    if (kind === 'send' && !document.getElementById('confirmBox').checked) {
+      return show('Tick the confirmation box first.', false);
+    }
+    busy(true);
+    const ok = r => {
+      busy(false); invalidate(); load();
+      const bad = r && typeof r === 'object' && (r.errors || r.invalid || r.newBounced);
+      show(typeof r === 'string' ? r : fmt(r), !bad);
+    };
+    const fail = e => { busy(false); show(e.message, false); };
+    const run = google.script.run.withSuccessHandler(ok).withFailureHandler(fail);
+    if (kind === 'send') run.sendMerge(opts());
+    else if (kind === 'test') run.sendTest(opts());
+    else if (kind === 'schedule') {
+      if (!val('when')) { busy(false); return show('Pick a date/time.', false); }
+      run.scheduleMerge(opts(), new Date(val('when')).getTime());
+    }
+    else if (kind === 'cancel') run.cancelScheduled();
+    else if (kind === 'check') run.checkRepliesAndBounces();
+  }
+
+  function fmt(r) {
+    if (r === undefined || r === null) return 'Done.';
+    if (r.checked !== undefined) return fmtCheck(r);
+    let t = 'Sent: ' + r.sent + ' | Invalid: ' + (r.invalid || 0) + ' | Errors: ' + r.errors + ' | Skipped: ' + r.skipped;
+    if (r.problems && r.problems.length) t += '\n\nProblems:\n' + r.problems.join('\n');
+    if (r.remaining) t += '\nNot processed (time/quota limit): ' + r.remaining + ' — click Review and Send again to continue.';
+    return t;
+  }
+  function fmtCheck(r) {
+    let t = 'Checked ' + r.checked + ' newly sent email(s)\nNew bounces: ' + r.newBounced + ' | New replies: ' + r.newReplied +
+            '\n\nTotals in sheet - Bounced: ' + r.bounced + ' | Replied: ' + r.replied;
+    if (r.bouncedList && r.bouncedList.length) t += '\n\nBounced:\n' + r.bouncedList.join('\n');
+    if (!r.checked) t += '\n\nNo rows with status "Sent" to check.';
+    return t;
+  }
+
+  document.querySelectorAll('input, select').forEach(el => {
+    if (el.id === 'confirmBox' || el.id === 'when') return;
+    el.addEventListener('change', invalidate);
+    el.addEventListener('input', invalidate);
+  });
+
+  load();
+</script>
+</body>
+</html>
