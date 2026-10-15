@@ -1,0 +1,48 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Build the dialog
+        working-directory: ui
+        run: npm run build
+
+      # Apps Script won't tell you the manifest is malformed until you push and
+      # the editor refuses to save. Catch it here instead.
+      - name: Validate the Apps Script manifest
+        run: node -e "JSON.parse(require('fs').readFileSync('src/appsscript.json','utf8'))"
+
+      - name: Check Apps Script syntax
+        run: |
+          cp src/code.gs /tmp/code.js
+          node --check /tmp/code.js
+
+      # Apps Script serves one file and can't reliably fetch external assets, so
+      # a stray CDN reference produces a dialog that renders blank with no error.
+      - name: Confirm the bundle is self-contained
+        run: |
+          if grep -qE '(src|href)="https?://' src/Dialog.html; then
+            echo "::error::Dialog.html references an external URL. Apps Script cannot reliably load those."
+            grep -oE '(src|href)="https?://[^"]+"' src/Dialog.html | head -5
+            exit 1
+          fi
+          echo "No external references."
